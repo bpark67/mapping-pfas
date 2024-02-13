@@ -1,0 +1,52 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-02-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(usa)
+```
+
+## Read Data
+
+```{r}
+df = read.csv("data/pfas data.csv")
+```
+
+## Distribution of log(PFAS + 1)
+
+```{r}
+df %>%
+  ggplot(aes(x = log(Concentration + 1))) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "Log Concetnration",
+         y = "Count")
+```
+
+## Determining Observations per State
+## Determining States with Presence-Absence Data
+
+```{r}
+states = data.frame(State = state.abb,
+                    Size = state.area)
+
+summary = df %>%
+  group_by(STUSPS) %>%
+  summarize(n = n(),
+            Min = min(Concentration),
+            Max = max(Concentration))
+
+summary = summary %>%
+  left_join(states, by = c("STUSPS" = "State")) %>%
+  mutate(PPS = signif(n/Size, 3)) %>%
+  arrange(desc(PPS))
+
+View(summary %>%
+       filter(PPS > 0.002))
+```
+
+

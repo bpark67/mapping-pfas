@@ -1,0 +1,263 @@
+---
+title: "POPA Split"
+output: html_document
+date: "2023-06-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(multispeciesPP)
+library(randomForest)
+```
+
+```{r}
+rm(list = ls())
+```
+
+# Data Processing
+
+## Read Data
+
+```{r read data}
+df = read.csv("data/pfas data.csv")
+ext = read.csv("data/extrapolation data.csv")
+```
+
+## Designate Presence-Absence Data States
+
+2 observations per 1000 square miles && 1 observation within each 1 degree X 1 degree pixel
+
+```{r designate pa states}
+pa_states = c("CA", "WI", "WV", "OH", "NC", "SC", "MA", "NJ", "CO", "RI", "MD", "MI", "NH")
+```
+
+## Set ppt Detection Threshold
+
+8 parts per trillion
+
+```{r designate detection threshold}
+df$PFAS8 = ifelse(df$Concentration >= 8, 1, 0)
+```
+
+
+## Simulate Skewedness; Remove Lower 50%
+
+```{r splitting by thresholds}
+thresh = c(1, 0.5)
+
+n_thresh = round(nrow(df) * thresh)
+
+df_list = list()
+
+for (i in 1:length(n_thresh)){
+  # Data is already arranged in descending order
+  # Pull out only the first x% of rows
+  df_list[[i]] = df[1:n_thresh[i],]
+}
+```
+
+## Set Target Covariates
+
+```{r set target columns}
+covariates = colnames(df)[! colnames(df) %in% c("Latitude", 
+                                                "Longitude", 
+                                                "Concentration", 
+                                                "STUSPS", 
+                                                "PFAS8")]
+# to_save = df %>%
+#   select(any_of(c(intensity, "Concentration", "Latitude", "Longitude", "STUSPS")))
+# to_save_ext = ext %>%
+#   select(any_of(c(intensity, "Latitude", "Longitude", "STUSPS")))
+# 
+# write.csv(to_save, "data/pfas data2.csv", row.names = F)
+# write.csv(to_save_ext, "data/extrapolation data2.csv", row.names = F)
+```
+
+## Split into PO and PA Data
+
+```{r}
+df_polist = list()
+df_palist = list()
+
+set.seed(16)
+for(i in 1:length(n_thresh)){
+# Choose rows for PA
+df_palist[[i]] = df_list[[i]] %>%
+  filter(df_list[[i]]$STUSPS %in% pa_states)
+
+# Choose rows for PO (not in PA)
+df_polist[[i]] = df_list[[i]] %>%
+  filter(!df_list[[i]]$STUSPS %in% pa_states)
+}
+```
+
+## Create Full Background (for PO Data)
+
+```{r}
+combined_list = list()
+
+for(i in 1:length(n_thresh)){
+combined_list[[i]] = df_polist[[i]] %>%
+  select(any_of(covariates)) %>%
+  bind_rows(ext %>% select(any_of(covariates)))
+}
+```
+
+# Fit IPP Model
+
+```{r}
+mod_list = list()
+intensity_formula = as.formula(paste("~", paste(covariates, collapse = "+")))
+bias_formula = as.formula(paste("~ ", paste(covariates, collapse = "+")))
+#################### Prepare the covariates ####################################
+# Covariates for intensity
+x = df %>%
+  select(-c("PFAS8")) %>%
+  select(any_of(covariates)) %>%
+  mutate_all(as.numeric)
+# Covariates for bias
+z = df %>%
+  select(-c("PFAS8"))%>%
+  select(any_of(covariates)) %>%
+  mutate_all(as.numeric)
+
+#################### START LOOP HERE ###########################################
+for(i in 1:length(n_thresh)){
+#################### Background Data ###########################################
+# Combine PO Data + Extrapolation points
+BG = cbind(combined_list[[i]] %>%
+             select(any_of(covariates)) %>%
+             mutate_all(as.numeric),
+           combined_list[[i]] %>%
+             select(any_of(covariates)) %>%
+             mutate_all(as.numeric))
+
+#################### Presence-only Data ########################################
+# All "Presence" rows from PO Data
+PO_rows = row.names(df_polist[[i]][df_polist[[i]]["PFAS8"] == 1,])
+
+# Grab all points of presences from Master DF
+PO = data.frame(x, z)[PO_rows,]
+
+# Turn into a list
+PO.list = list(a = PO)
+
+# Remove for memory
+rm(PO, PO_rows)
+
+#################### Presence-Absence Data #####################################
+# Presence-Absence column from PA data
+a = df_palist[[i]]$PFAS8
+
+# Rows of the PA dataset
+PA_rows = row.names(df_palist[[i]])
+PA = data.frame(x[PA_rows,], a)
+
+rm(a, PA_rows)
+#################### Fit IPP Model #############################################
+mod_list[[i]] = multispeciesPP(intensity_formula,
+                               bias_formula,
+                               PA,
+                               PO.list,
+                               BG,
+                               region.size = nrow(BG),
+                               penalty.l2.sdm=.00001,
+                               penalty.l2.bias=.001,
+                               penalty.l2.intercept=0.0001,
+                               control=list(trace=TRUE,maxit=100))
+}
+```
+
+## Save
+
+### Intensity
+```{r}
+intensity_datasets = list()
+
+for(i in 1:length(n_thresh)){
+intensity_datasets[[i]] = bind_rows(df_polist[[i]][c("Longitude", "Latitude")],
+                                    ext[c("Longitude", "Latitude")])
+
+intensity_datasets[[i]]$fit = as.vector(mod_list[[i]]$fit.BG)
+}
+
+write.csv(intensity_datasets[[1]],
+          "results/100% Intensity Predictions.csv",
+          row.names = F)
+write.csv(intensity_datasets[[2]],
+          "Results/50% Intensity Predictions.csv",
+          row.names = F)
+```
+
+### Bias
+
+```{r}
+bias_datasets = list()
+
+for(i in 1:length(n_thresh)){
+bias_datasets[[i]] = bind_rows(df_polist[[i]][c("Longitude", "Latitude")], 
+                               ext[c("Longitude", "Latitude")])
+
+bias_datasets[[i]]$bias = as.vector(mod_list[[i]]$bias.fit.BG)
+}
+
+
+write.csv(bias_datasets[[1]],
+          "results/100% Bias Function.csv",
+          row.names = F)
+write.csv(bias_datasets[[2]],
+          "results/50% Bias Function.csv",
+          row.names = F)
+```
+
+
+
+# Fit Random Forest
+
+```{r}
+rf_list = list()
+
+rf_formula = as.formula(paste("as.factor(PFAS8)~", paste(covariates, collapse = "+")))
+
+set.seed(16)
+
+for(i in 1:2){
+rf_list[[i]] = randomForest(rf_formula, 
+                            data = df_list[[i]], 
+                            proximity = T,
+                            importance = T,
+                            keep.forest = T)
+}
+```
+
+## Extrapolate
+
+```{r extrapolated predictions}
+ext_preds = list()
+
+for (i in 1:length(n_thresh)){
+pred = predict(rf_list[[i]],
+               newdata = rbind(df_list[[i]][covariates], ext[covariates]),
+               type = "prob")
+
+locs = rbind(df_list[[i]][c("Longitude", "Latitude")],
+             ext[c("Longitude", "Latitude")])
+
+locs$fit = unname(pred[,2])
+
+ext_preds[[i]] = locs
+}
+```
+
+## Save
+
+```{r}
+write.csv(ext_preds[[1]], "results/100% RF Predictions.csv", row.names = F)
+write.csv(ext_preds[[2]], "results/50% RF Predictions.csv", row.names = F)
+```
+
+
+
+
+
