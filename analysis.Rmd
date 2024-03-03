@@ -231,6 +231,14 @@ rf_list[[i]] = randomForest(rf_formula,
 }
 ```
 
+## Confusion Matrix/Sensitivity/Specificity
+
+```{r}
+rf_list[[1]]$confusion
+rf_list[[2]]$confusion
+```
+
+
 ## Extrapolate
 
 ```{r extrapolated predictions}
