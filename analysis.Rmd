@@ -1,7 +1,7 @@
 ---
-title: "POPA Split"
+title: "Analysis for Statistical Mapping of PFOA and PFOS in Groundwater Throughout the Contiguous United States"
 output: html_document
-date: "2023-06-08"
+date: "2024-08-05"
 ---
 
 ```{r setup, include=FALSE}
@@ -23,6 +23,44 @@ rm(list = ls())
 df = read.csv("data/pfas data.csv")
 ext = read.csv("data/extrapolation data.csv")
 ```
+
+### Create Visualizations
+
+```{r create histogram}
+p = df %>%
+  ggplot(aes(x = log(Concentration + 1))) +
+  geom_histogram(bins = 34, fill = "cornflowerblue") + 
+  geom_vline(xintercept = log(8 + 1), color = "red") + 
+  theme_bw() +
+  labs(title = "Histogram of PFAS Concentrations",
+       x = "Log(PFAS Concentration + 1)",
+       y = "Frequency") +
+  annotate("text", x = log(8 + 1) + 0.2, y = 1300, label = "Detection Threshold",
+           color = "red", angle = -90, size = 3)
+
+ggsave("figures/svg/PFASConcentration.eps", p, width = 8, height = 6)
+```
+
+### Create Table (in LaTeX)
+
+```{r}
+set.seed(16)
+df %>%
+  select(1:10) %>%
+  round(2) %>%
+  dplyr::sample_n(3) %>%
+  knitr::kable("latex", booktabs = T, caption = "Sample of PFAS Data")
+
+set.seed(16)
+df %>%
+  select(11:18) %>%
+  round(2) %>%
+  mutate(State = df$STUSPS) %>%
+  dplyr::sample_n(3) %>%
+  knitr::kable("latex", booktabs = T, caption = "Sample of PFAS Data")
+```
+
+
 
 ## Designate Presence-Absence Data States
 
@@ -65,13 +103,6 @@ covariates = colnames(df)[! colnames(df) %in% c("Latitude",
                                                 "Concentration", 
                                                 "STUSPS", 
                                                 "PFAS8")]
-# to_save = df %>%
-#   select(any_of(c(intensity, "Concentration", "Latitude", "Longitude", "STUSPS")))
-# to_save_ext = ext %>%
-#   select(any_of(c(intensity, "Latitude", "Longitude", "STUSPS")))
-# 
-# write.csv(to_save, "data/pfas data2.csv", row.names = F)
-# write.csv(to_save_ext, "data/extrapolation data2.csv", row.names = F)
 ```
 
 ## Split into PO and PA Data
