@@ -1,0 +1,149 @@
+---
+title: "Web Map for Statistical Mapping of PFOA and PFOS in Groundwater Throughout the Contiguous United States"
+author:
+  - Bumjun Park^[University of Washington, Department of Biostatistics]
+  - Hyunseung Kang^[University of Wisconsin-Madison, Department of Statistics]
+  - Christopher Zahasky^[University of Wisconsin-Madison, Department of Geoscience]
+output:
+  bookdown::html_document2:
+    number_sections: false
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    theme: yeti
+date: "2024-08-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, dev = "png")
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggrepel)
+```
+
+
+# CONUS Percentile Map
+
+```{r read-usa}
+usa = sf::read_sf("mapping/shapefiles/CONUS/cb_2018_us_state_500k.shp",
+                  stringsAsFactors = FALSE) %>%
+  as_Spatial() %>%
+  st_as_sf() %>%
+  st_transform(dst = "OGC:CRS84")
+```
+
+```{r read-cities}
+cities = read_sf(dsn = file.path("mapping/shapefiles/USA_Major_Cities/USA_Major_Cities.shp"),
+             stringsAsFactors = F) %>%
+  as_Spatial() %>%
+  st_as_sf() %>%
+  st_transform(dst = "OGC:CRS84") %>%
+  arrange(desc(POPULATION)) %>%
+  filter(POPULATION > 400000)
+```
+
+
+
+```{r plot-usa, warning = FALSE, message = FALSE, fig.cap = "Fig.3 in Manuscript with Locations of Cities with Population Greater than 400,000"}
+rast = raster("figures/tiff/100% Intensity.tif")
+
+rast_df = as(rast, "SpatialPixelsDataFrame") %>%
+  as.data.frame()
+
+quants = quantile(rast_df$X100..Intensity, probs = c(0.5, 0.75, 0.9, 0.99))
+
+colorbreaker = function(var){
+  if (var < quants[1]){
+    return(1)
+  } else if (quants[1] <= var & var< quants[2]){
+    return(2)
+  } else if (quants[2] <= var & var < quants[3]){
+    return(3)
+  } else if (quants[3] <= var & var < quants[4]){
+    return(4)
+  } else if (quants[4] <= var){
+    return(5)
+  }
+}
+
+rast_df$colornum = sapply(rast_df$X100..Intensity, colorbreaker) %>% as.factor
+
+plotclr = scico::scico(5, palette = "lapaz", direction = -1)
+
+names(plotclr) = as.factor(1:5)
+
+usa %>%
+  ggplot() +
+  geom_sf(fill = "white", color = "black")+
+  geom_tile(data = rast_df, aes(x = x, y = y, fill = colornum), alpha = 0.8) +
+  geom_sf(data = cities, col = "#031327", shape = 9, alpha = 0.8) +
+  geom_label_repel(data = cities, aes(label = NAME,  geometry = geometry),
+                   stat = "sf_coordinates",
+                   col = "#031327", fontface = "bold", alpha = 0.5, size = 2) +
+  scale_fill_manual(values = plotclr,
+                    labels = c("< 50th Percentile", 
+                               "> 50th", 
+                               "> 75th", 
+                               "> 90th", 
+                               "> 99th"),
+                    name = "Intensity") +
+  theme_bw() +
+  coord_sf() +
+  xlab("") +
+  ylab("") +
+  theme(legend.position = "bottom",
+  panel.grid = element_blank(),
+  panel.border = element_blank(),
+  axis.ticks = element_blank(),
+  axis.text = element_blank())
+```
+
+# Boston Relative Risk Map
+
+```{r boston-map, warning = FALSE, message = FALSE, fig.cap = "Fig.4 in Manuscript with Locations of Cities with Population Greater than 400,000"}
+boston_rr = raster("figures/tiff/Boston Relative Risk.tif")
+
+boston_rr_df = as(boston_rr, "SpatialPixelsDataFrame") %>%
+  as.data.frame()
+
+## Gradient Color Scale: 0 ~ 2:
+## 0: #2b83ba
+## 0.5: #4ecddd
+## 1: #ffffff
+## 1.5: #fdae61
+## 2: #d7191c
+
+boston_rr_df$CutRR = cut(boston_rr_df$Boston.Relative.Risk, breaks = c(0, 0.5, 1, 1.5, 2), labels = c(0, 0.5, 1, 1.5))
+
+usa %>%
+  ggplot() +
+  geom_sf(fill = "white", color = "black")+
+  geom_tile(data = boston_rr_df, aes(x = x, y = y, fill = Boston.Relative.Risk), alpha = 0.8) +
+  scale_fill_gradientn(colors = c("#2b83ba", "#4ecddd", "#ffffff", "#fdae61", "#d7191c"),
+                       values = c(0, 0.25, 0.5, 0.75, 1),
+                       limits = c(0, 2),
+                       oob = scales::squish,
+                       name = "Relative Risk") +
+  geom_sf(data = cities, col = "#031327", shape = 9, alpha = 0.8) +
+  geom_label_repel(data = cities, aes(label = NAME,  geometry = geometry),
+                   stat = "sf_coordinates",
+                   col = "#031327", fontface = "bold", alpha = 0.5, size = 2) +
+  theme_bw() +
+  coord_sf() +
+  xlab("") +
+  ylab("") +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank())
+```
+
+
+
+# References
+
+- [United States Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html)

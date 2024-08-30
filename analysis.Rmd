@@ -24,45 +24,7 @@ df = read.csv("data/pfas data.csv")
 ext = read.csv("data/extrapolation data.csv")
 ```
 
-### Create Visualizations
-
-```{r create histogram}
-p = df %>%
-  ggplot(aes(x = log(Concentration + 1))) +
-  geom_histogram(bins = 34, fill = "cornflowerblue") + 
-  geom_vline(xintercept = log(8 + 1), color = "red") + 
-  theme_bw() +
-  labs(title = "Histogram of PFAS Concentrations",
-       x = "Log(PFAS Concentration + 1)",
-       y = "Frequency") +
-  annotate("text", x = log(8 + 1) + 0.2, y = 1300, label = "Detection Threshold",
-           color = "red", angle = -90, size = 3)
-
-ggsave("figures/svg/PFASConcentration.eps", p, width = 8, height = 6)
-```
-
-### Create Table (in LaTeX)
-
-```{r}
-set.seed(16)
-df %>%
-  select(1:10) %>%
-  round(2) %>%
-  dplyr::sample_n(3) %>%
-  knitr::kable("latex", booktabs = T, caption = "Sample of PFAS Data")
-
-set.seed(16)
-df %>%
-  select(11:18) %>%
-  round(2) %>%
-  mutate(State = df$STUSPS) %>%
-  dplyr::sample_n(3) %>%
-  knitr::kable("latex", booktabs = T, caption = "Sample of PFAS Data")
-```
-
-
-
-## Designate Presence-Absence Data States
+### Designate Presence-Absence Data States
 
 2 observations per 1000 square miles && 1 observation within each 1 degree X 1 degree pixel
 
@@ -70,13 +32,57 @@ df %>%
 pa_states = c("CA", "WI", "WV", "OH", "NC", "SC", "MA", "NJ", "CO", "RI", "MD", "MI", "NH")
 ```
 
-## Set ppt Detection Threshold
+### Set ppt Detection Threshold
 
 8 parts per trillion
 
 ```{r designate detection threshold}
 df$PFAS8 = ifelse(df$Concentration >= 8, 1, 0)
 ```
+
+### Create Violin Plot Visualizations
+
+```{r create violin}
+# Violin Plot
+pviol = df %>%
+  mutate(PA = ifelse(STUSPS %in% pa_states, "PA", "PO")) %>%
+  ggplot(aes(x = PA, y = log(Concentration + 1), fill = PA)) +
+  geom_violin() +
+  geom_boxplot(width = 0.1, fill = "white") +
+  geom_hline(yintercept = log(8 + 1), color = "red") +
+  theme_bw() +
+  labs(x = "Presence-Absence",
+       y = "Log(PFAS Concentration + 1)") +
+  annotate("text", x = 1.5, y = log(8 + 1) + 0.5, label = "log(8 + 1)",
+           color = "red", size = 5) +
+  theme(legend.position = "none",
+        axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13)) +
+  scale_fill_manual(values = c("#003366", "#006400"))
+
+# ggsave("figures/svg/PFASConcentrationViolin.eps", pviol, width = 8, height = 6)
+```
+
+### Create Summary Table (in LaTeX)
+
+```{r}
+summary_statistics = matrix(nrow = ncol(df)-4, ncol = 5)
+
+for(i in 1:(ncol(df)-4)){
+  summary_statistics[i,] = c(mean(df[[i]]), sd(df[[i]]), min(df[[i]]), median(df[[i]]), max(df[[i]]))
+}
+
+row.names(summary_statistics) = colnames(df)[1:16]
+colnames(summary_statistics) = c("Mean", "SD", "Min", "Median", "Max")
+
+summary_statistics %>%
+  round(2) %>%
+  as.data.frame() %>%
+  knitr::kable("latex", booktabs = T, caption = "Summary Statistics of Data Set")
+```
+
 
 
 ## Simulate Skewedness; Remove Lower 50%
@@ -200,6 +206,78 @@ mod_list[[i]] = multispeciesPP(intensity_formula,
 }
 ```
 
+## Conduct Covariate Analysis
+
+```{r}
+se100 = mod_list[[1]]$std.errs[1:17]
+se50 = mod_list[[2]]$std.errs[1:17]
+names(se100) <- sub("^a:", "", names(se100))
+names(se50) <- sub("^a:", "", names(se50))
+
+estimates = data.frame(
+  "100 Intensity" = mod_list[[1]]$species.coef,
+  "100 SE" = se100,
+  "50 Intensity" = mod_list[[2]]$species.coef,
+  "50 SE" = se50
+)
+
+intercept = signif(estimates[1,], 3)
+
+estimates = estimates[-1,]
+
+cov_an = estimates %>%
+  signif(3) %>%
+  arrange(desc(abs(a))) %>%
+  tibble::add_row(a = intercept$a, 
+                  a.1 = intercept$a.1, 
+                  X100.SE = intercept$X100.SE,
+                  X50.SE = intercept$X50.SE,
+                  .before = 1)
+
+row.names(cov_an) = c("(Intercept)", row.names(cov_an)[-1])
+
+cov_an %>%
+  knitr::kable("latex", booktabs = T, caption = "Covariate Analysis of Intensity from IPP Model using 100% and 50% of Data") %>%
+  kableExtra::add_header_above(c(" " = 1, "100% Data" = 2, "50% Data" = 2))
+```
+
+```{r}
+bias_estimates = data.frame(
+  "b100" = mod_list[[1]]$bias.coef,
+  "b50" = mod_list[[2]]$bias.coef
+) %>% signif(3) %>%
+  arrange(desc(abs(b100)))
+
+bias_estimates %>%
+  knitr::kable("latex", booktabs = T, caption = "Bias Covariate Analysis of IPP Model using 100% and 50% of Data") %>%
+  kableExtra::add_header_above(c(" " = 1, "100% Data" = 1, "50% Data" = 1))
+```
+
+## Compare Two Models
+
+```{r}
+compare = data.frame(
+  m1 = mod_list[[1]]$fit.BG[(nrow(df_polist[[1]]) + 1):nrow(mod_list[[1]]$fit.BG)],
+  m2 = mod_list[[2]]$fit.BG[(nrow(df_polist[[2]]) + 1):nrow(mod_list[[2]]$fit.BG)]
+)
+
+compare$delta = compare$m1 - compare$m2
+
+ipp1 = compare %>%
+  ggplot(aes(x = log(m1), y = log(m2))) +
+  geom_point() +
+  theme_bw() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +
+  annotate("text", x = 0, y = -2, label = "45° Line", size = 7, col = "red", angle = 35) +
+  labs(x = latex2exp::TeX("$log(\\lambda_{100\\%})$"), 
+       y = latex2exp::TeX("$log(\\lambda_{50\\%})$")) +
+  theme(axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20)) # Increase size of x lab and ylab
+
+# ggsave("figures/svg/IPPComparison.eps", ipp1, width = 8, height = 6)
+```
+
+
 ## Save
 
 ### Intensity
@@ -207,18 +285,19 @@ mod_list[[i]] = multispeciesPP(intensity_formula,
 intensity_datasets = list()
 
 for(i in 1:length(n_thresh)){
+  # NOTE: We exclude .fit.PA because it estimates Probability, not Intensity
 intensity_datasets[[i]] = bind_rows(df_polist[[i]][c("Longitude", "Latitude")],
                                     ext[c("Longitude", "Latitude")])
 
 intensity_datasets[[i]]$fit = as.vector(mod_list[[i]]$fit.BG)
 }
 
-write.csv(intensity_datasets[[1]],
-          "results/100% Intensity Predictions.csv",
-          row.names = F)
-write.csv(intensity_datasets[[2]],
-          "Results/50% Intensity Predictions.csv",
-          row.names = F)
+# write.csv(intensity_datasets[[1]],
+#           "results/100% Intensity Predictions.csv",
+#           row.names = F)
+# write.csv(intensity_datasets[[2]],
+#           "Results/50% Intensity Predictions.csv",
+#           row.names = F)
 ```
 
 ### Bias
@@ -234,14 +313,13 @@ bias_datasets[[i]]$bias = as.vector(mod_list[[i]]$bias.fit.BG)
 }
 
 
-write.csv(bias_datasets[[1]],
-          "results/100% Bias Function.csv",
-          row.names = F)
-write.csv(bias_datasets[[2]],
-          "results/50% Bias Function.csv",
-          row.names = F)
+# write.csv(bias_datasets[[1]],
+#           "results/100% Bias Function.csv",
+#           row.names = F)
+# write.csv(bias_datasets[[2]],
+#           "results/50% Bias Function.csv",
+#           row.names = F)
 ```
-
 
 
 # Fit Random Forest
@@ -269,6 +347,19 @@ rf_list[[1]]$confusion
 rf_list[[2]]$confusion
 ```
 
+## Covariate Analysis
+
+```{r}
+mean_decrease_accuracy = data.frame(
+  "Importance100" = rf_list[[1]]$importance[,3],
+  "Importance50" = rf_list[[2]]$importance[,3]
+) %>% round(3) %>%
+  arrange(desc(abs(Importance100)))
+
+mean_decrease_accuracy %>%
+  knitr::kable("latex", booktabs = T, caption = "Covariate Analysis of Random Forest Model using 100% and 50% of Data")
+```
+
 
 ## Extrapolate
 
@@ -289,13 +380,89 @@ ext_preds[[i]] = locs
 }
 ```
 
+## Compare Two Models
+
+```{r}
+compare_rf = data.frame(
+  m1 = ext_preds[[1]]$fit[(nrow(df_list[[1]]) + 1):nrow(ext_preds[[1]])],
+  m2 = ext_preds[[2]]$fit[(nrow(df_list[[2]]) + 1):nrow(ext_preds[[2]])]
+)
+
+compare_rf$delta = compare$m1 - compare$m2
+
+rf1 = compare_rf %>%
+  ggplot(aes(x = log(m1), y = log(m2))) +
+  geom_point() +
+  theme_bw() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +
+  annotate("text", x = 0, y = -0.2, label = "45° Line", size = 7, col = "red", angle = 70) +
+  labs(x = latex2exp::TeX("$log(p_{100\\%})$"),
+       y = latex2exp::TeX("$log(p_{50\\%}$)")) +
+  theme(axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20))
+
+# ggsave("figures/svg/RFComparison.eps", rf1, width = 8, height = 6)
+```
+
+
 ## Save
 
 ```{r}
-write.csv(ext_preds[[1]], "results/100% RF Predictions.csv", row.names = F)
-write.csv(ext_preds[[2]], "results/50% RF Predictions.csv", row.names = F)
+# write.csv(ext_preds[[1]], "results/100% RF Predictions.csv", row.names = F)
+# write.csv(ext_preds[[2]], "results/50% RF Predictions.csv", row.names = F)
 ```
 
+# Kriging
+
+## 100 %
+
+```{r}
+library(sp)
+library(gstat)
+
+spdf = SpatialPointsDataFrame(coords = df[,c("Longitude", "Latitude")],
+                              data = df,
+                              proj4string = CRS("+proj=longlat +datum=WGS84"))
+spdf$logConcentration = log(spdf$Concentration + 1)
+
+spext = SpatialPointsDataFrame(coords = ext[,c("Longitude", "Latitude")],
+                               data = ext,
+                               proj4string = CRS("+proj=longlat +datum=WGS84"))
+
+vgm = variogram(logConcentration ~ 1, spdf)
+fit.vgm = fit.variogram(vgm, vgm(model = "Mat"))
+
+plot(vgm, fit.vgm)
+
+# spext %>%
+#   as.data.frame() %>%
+#   ggplot(aes(x = Longitude, y = Latitude)) +
+#   geom_point() +
+#   theme_bw()
+
+kriged = krige(logConcentration ~ 1, spdf, spext, fit.vgm)
+
+write.csv(cbind(kriged@data, kriged@coords), "results/Kriging.csv", row.names = F)
+```
+
+## 50%
+
+```{r}
+spdf = SpatialPointsDataFrame(coords = df_list[[2]][,c("Longitude", "Latitude")],
+                              data = df_list[[2]],
+                              proj4string = CRS("+proj=longlat +datum=WGS84"))
+
+spdf$logConcentration = log(spdf$Concentration + 1)
+
+vgm = variogram(logConcentration ~ 1, spdf)
+fit.vgm = fit.variogram(vgm, vgm(model = "Mat"))
+
+plot(vgm, fit.vgm)
+
+kriged = krige(logConcentration ~ 1, spdf, spext, fit.vgm)
+
+write.csv(cbind(kriged@data, kriged@coords), "results/Kriging50.csv", row.names = F)
+```
 
 
 
